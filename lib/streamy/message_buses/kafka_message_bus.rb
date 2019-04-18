@@ -6,6 +6,8 @@ require "active_support/json"
 module Streamy
   module MessageBuses
     class KafkaMessageBus < MessageBus
+      require "streamy/message_buses/kafka_message_bus/delivery"
+
       delegate :deliver_messages, to: :sync_producer, prefix: true
 
       def initialize(config)
@@ -14,46 +16,23 @@ module Streamy
       end
 
       def deliver(key:, topic:, payload:, priority:)
-        producer(priority).tap do |p|
-          p.produce(payload, key: key, topic: topic)
-          case priority
-          when :essential, :standard
-            p.deliver_messages
-          when :batched
-            if config.producer[:max_buffer_size] == p.buffer_size
-              logger.info "Delivering #{p.buffer_size} batched events now"
-              p.deliver_messages
-            end
-          end
-        end
+        Delivery.new(
+          bus: self,
+          priority: priority,
+        ).deliver(key: key, topic: topic, payload: payload)
       end
 
       def shutdown
-        async_producer.shutdown if async_producer?
-        sync_producers.map(&:shutdown)
+        async_producer&.shutdown
+        all_sync_producers.map(&:shutdown)
       end
 
-      private
+      #private
 
         attr_reader :kafka, :config
 
-        def producer(priority)
-          case priority
-          when :essential, :batched
-            return sync_producer
-          when :standard, :low
-            async_producer
-          else
-            fail "Unknown priority"
-          end
-        end
-
         def async_producer
           @_async_producer ||= kafka.async_producer(**config.async)
-        end
-
-        def async_producer?
-          @_async_producer.present?
         end
 
         def sync_producer
@@ -61,14 +40,14 @@ module Streamy
           Thread.current[:streamy_kafka_sync_producer] ||= kafka.producer(**config.producer)
         end
 
-        def sync_producers
+        def all_sync_producers
           Thread.list.map do |thread|
             thread[:streamy_kafka_sync_producer]
           end.compact
         end
 
-        def logger
-          ::Streamy.logger
+        def max_buffer_size
+          config.producer[:max_buffer_size]
         end
     end
   end
