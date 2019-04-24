@@ -16,10 +16,8 @@ module Streamy
       end
 
       def deliver(key:, topic:, payload:, priority:)
-        Delivery.new(
-          bus: self,
-          priority: priority,
-        ).deliver(key: key, topic: topic, payload: payload)
+        delivery_options = delivery_options(priority)
+        Delivery.new(delivery_options).deliver(key: key, topic: topic, payload: payload)
       end
 
       def shutdown
@@ -27,9 +25,30 @@ module Streamy
         all_sync_producers.map(&:shutdown)
       end
 
-      #private
+      private
 
         attr_reader :kafka, :config
+
+        def delivery_options(priority)
+          {
+            low: {
+              producer: async_producer,
+              delivery: :later
+            },
+            standard: {
+              producer: async_producer
+              delivery: :asap
+            },
+            essential: {
+              producer: sync_producer,
+              delivery: :asap
+            },
+            batched: {
+              producer: sync_producer,
+              delivery: :batched
+            }
+          }[priority]
+        end
 
         def async_producer
           @_async_producer ||= kafka.async_producer(**config.async)
